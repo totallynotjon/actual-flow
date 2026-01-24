@@ -28,7 +28,7 @@ export interface ActualBudgetTransaction {
   imported_id?: string;
   isDuplicate?: boolean;
   duplicateOf?: string; // ID of the existing transaction this duplicates
-  isPending?: boolean;
+  isPending: boolean;
 }
 
 export interface ActualBudgetAccount {
