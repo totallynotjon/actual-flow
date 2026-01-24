@@ -280,8 +280,8 @@ export class LunchFlowImporter {
         return;
       }
 
-      // Remove duplicate detection fields before import
-      const cleanTransactions = uniqueTransactions.map(({ isDuplicate, duplicateOf, ...transaction }) => transaction);
+      // Remove internal tracking fields before import (Actual Budget API doesn't recognize them)
+      const cleanTransactions = uniqueTransactions.map(({ isDuplicate, duplicateOf, isPending, ...transaction }) => transaction);
 
       const importSpinner = this.ui.showSpinner(`Importing ${cleanTransactions.length} transactions...`);
       await this.abClient.importTransactions(cleanTransactions);
