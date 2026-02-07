@@ -1,6 +1,6 @@
 {
   "name": "@lunchflow/actual-flow",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "Import transactions from Lunch Flow to Actual Budget with terminal UI.",
   "main": "./dist/index.js",
   "bin": {
@@ -39,5 +39,9 @@
     "@types/node": "^20.0.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.0.0"
+  },
+  "packageManager": "pnpm@10.5.0",
+  "engines": {
+    "pnpm": ">=10.0.0"
   }
 }
