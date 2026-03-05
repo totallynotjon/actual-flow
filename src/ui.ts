@@ -138,7 +138,8 @@ export class TerminalUI {
 
   async configureAccountMappings(
     lfAccounts: LunchFlowAccount[],
-    abAccounts: ActualBudgetAccount[]
+    abAccounts: ActualBudgetAccount[],
+    existingMappings: AccountMapping[] = []
   ): Promise<AccountMapping[]> {
     console.log(chalk.yellow('\n📋 Configure Account Mappings\n'));
     console.log(chalk.gray('Map each Lunch Flow account to an Actual Budget account:\n'));
@@ -146,6 +147,37 @@ export class TerminalUI {
     const mappings: AccountMapping[] = [];
 
     for (const lfAccount of lfAccounts) {
+      const existingMapping = existingMappings.find(
+        m => m.lunchFlowAccountId === lfAccount.id
+      );
+
+      if (existingMapping) {
+        const currentInfo =
+          `Currently mapped to: ${existingMapping.actualBudgetAccountName}` +
+          (existingMapping.syncStartDate ? ` | Sync start: ${existingMapping.syncStartDate}` : '') +
+          ` | Pending: ${existingMapping.includePending ? 'Yes' : 'No'}`;
+
+        const { action } = await inquirer.prompt([{
+          type: 'list',
+          name: 'action',
+          message: `"${lfAccount.name}" — ${currentInfo}\n  What would you like to do?`,
+          choices: [
+            { name: 'Keep as is', value: 'keep' },
+            { name: 'Edit mapping', value: 'edit' },
+            { name: 'Delete mapping', value: 'delete' },
+          ],
+        }]);
+
+        if (action === 'keep') {
+          mappings.push(existingMapping);
+          continue;
+        }
+        if (action === 'delete') {
+          continue;
+        }
+        // action === 'edit': fall through to account-selection prompts
+      }
+
       const choices = abAccounts.map(abAccount => ({
         name: `${abAccount.name} (${abAccount.currency})`,
         value: abAccount.id,
@@ -156,6 +188,7 @@ export class TerminalUI {
           type: 'list',
           name: 'abAccountId',
           message: `Map "${lfAccount.name}" (${lfAccount.institution_name}) to:`,
+          default: existingMapping?.actualBudgetAccountId ?? 'skip',
           choices: [
             { name: 'Skip this account', value: 'skip' },
             ...choices,
@@ -172,6 +205,7 @@ export class TerminalUI {
               type: 'input',
               name: 'syncStartDate',
               message: `Sync start date for "${lfAccount.name}" (YYYY-MM-DD, optional - press Enter to skip):`,
+              default: existingMapping?.syncStartDate ?? '',
               validate: (input: string) => {
                 if (!input.trim()) return true; // Empty is allowed
                 const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -193,7 +227,7 @@ export class TerminalUI {
               type: 'confirm',
               name: 'includePending',
               message: `Include pending (unposted) transactions for "${lfAccount.name}"?`,
-              default: false,
+              default: existingMapping?.includePending ?? false,
             },
           ]);
 

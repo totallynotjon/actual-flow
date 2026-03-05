@@ -112,7 +112,8 @@ export class LunchFlowImporter {
       await this.ui.showAccountsTable(lfAccounts, '📡 Lunch Flow Accounts');
       await this.ui.showAccountsTable(abAccounts, '💰 Actual Budget Accounts');
 
-      const mappings = await this.ui.configureAccountMappings(lfAccounts, abAccounts);
+      const existingMappings = this.config?.accountMappings ?? [];
+      const mappings = await this.ui.configureAccountMappings(lfAccounts, abAccounts, existingMappings);
       
       if (this.config) {
         this.config.accountMappings = mappings;
