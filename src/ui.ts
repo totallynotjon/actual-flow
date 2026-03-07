@@ -154,8 +154,9 @@ export class TerminalUI {
       if (existingMapping) {
         const currentInfo =
           `Currently mapped to: ${existingMapping.actualBudgetAccountName}` +
-          (existingMapping.syncStartDate ? ` | Sync start: ${existingMapping.syncStartDate}` : '') +
-          ` | Pending: ${existingMapping.includePending ? 'Yes' : 'No'}`;
+          (existingMapping.balanceOnly ? ' | Mode: Balance Only' :
+            (existingMapping.syncStartDate ? ` | Sync start: ${existingMapping.syncStartDate}` : '') +
+            ` | Pending: ${existingMapping.includePending ? 'Yes' : 'No'}`);
 
         const { action } = await inquirer.prompt([{
           type: 'list',
@@ -199,35 +200,13 @@ export class TerminalUI {
       if (answer.abAccountId !== 'skip') {
         const abAccount = abAccounts.find(a => a.id === answer.abAccountId);
         if (abAccount) {
-          // Ask for optional sync start date
-          const dateAnswer = await inquirer.prompt([
-            {
-              type: 'input',
-              name: 'syncStartDate',
-              message: `Sync start date for "${lfAccount.name}" (YYYY-MM-DD, optional - press Enter to skip):`,
-              default: existingMapping?.syncStartDate ?? '',
-              validate: (input: string) => {
-                if (!input.trim()) return true; // Empty is allowed
-                const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-                if (!dateRegex.test(input)) {
-                  return 'Please enter date in YYYY-MM-DD format or leave empty';
-                }
-                const date = new Date(input);
-                if (isNaN(date.getTime())) {
-                  return 'Please enter a valid date';
-                }
-                return true;
-              },
-            },
-          ]);
-
-          // Ask whether to include pending transactions
-          const pendingAnswer = await inquirer.prompt([
+          // Ask if this is a balance-only account
+          const balanceOnlyAnswer = await inquirer.prompt([
             {
               type: 'confirm',
-              name: 'includePending',
-              message: `Include pending (unposted) transactions for "${lfAccount.name}"?`,
-              default: existingMapping?.includePending ?? false,
+              name: 'balanceOnly',
+              message: `Balance only (skip transactions, just sync balance) for "${lfAccount.name}"?`,
+              default: existingMapping?.balanceOnly ?? false,
             },
           ]);
 
@@ -238,12 +217,48 @@ export class TerminalUI {
             actualBudgetAccountName: abAccount.name,
           };
 
-          if (dateAnswer.syncStartDate.trim()) {
-            mapping.syncStartDate = dateAnswer.syncStartDate.trim();
-          }
+          if (balanceOnlyAnswer.balanceOnly) {
+            mapping.balanceOnly = true;
+          } else {
+            // Ask for optional sync start date
+            const dateAnswer = await inquirer.prompt([
+              {
+                type: 'input',
+                name: 'syncStartDate',
+                message: `Sync start date for "${lfAccount.name}" (YYYY-MM-DD, optional - press Enter to skip):`,
+                default: existingMapping?.syncStartDate ?? '',
+                validate: (input: string) => {
+                  if (!input.trim()) return true; // Empty is allowed
+                  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+                  if (!dateRegex.test(input)) {
+                    return 'Please enter date in YYYY-MM-DD format or leave empty';
+                  }
+                  const date = new Date(input);
+                  if (isNaN(date.getTime())) {
+                    return 'Please enter a valid date';
+                  }
+                  return true;
+                },
+              },
+            ]);
 
-          if (pendingAnswer.includePending) {
-            mapping.includePending = true;
+            // Ask whether to include pending transactions
+            const pendingAnswer = await inquirer.prompt([
+              {
+                type: 'confirm',
+                name: 'includePending',
+                message: `Include pending (unposted) transactions for "${lfAccount.name}"?`,
+                default: existingMapping?.includePending ?? false,
+              },
+            ]);
+
+            if (dateAnswer.syncStartDate.trim()) {
+              mapping.syncStartDate = dateAnswer.syncStartDate.trim();
+            }
+
+            if (pendingAnswer.includePending) {
+              mapping.includePending = true;
+            }
           }
 
           mappings.push(mapping);
@@ -263,8 +278,8 @@ export class TerminalUI {
     }
 
     const table = new Table({
-      head: ['Lunch Flow Account', '→', 'Actual Budget Account', 'Sync Start', 'Pending'],
-      colWidths: [25, 3, 25, 12, 10],
+      head: ['Lunch Flow Account', '→', 'Actual Budget Account', 'Mode', 'Sync Start', 'Pending'],
+      colWidths: [25, 3, 25, 14, 12, 10],
       style: {
         head: ['cyan'],
         border: ['gray'],
@@ -276,8 +291,9 @@ export class TerminalUI {
         mapping.lunchFlowAccountName,
         '→',
         mapping.actualBudgetAccountName,
-        mapping.syncStartDate || chalk.gray('None'),
-        mapping.includePending ? chalk.green('Yes') : chalk.gray('No')
+        mapping.balanceOnly ? chalk.yellow('Balance Only') : 'Transactions',
+        mapping.balanceOnly ? chalk.gray('N/A') : (mapping.syncStartDate || chalk.gray('None')),
+        mapping.balanceOnly ? chalk.gray('N/A') : (mapping.includePending ? chalk.green('Yes') : chalk.gray('No'))
       ]);
     });
 

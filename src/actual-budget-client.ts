@@ -199,6 +199,14 @@ export class ActualBudgetClient {
     }
   }
 
+  async updateAccountBalance(accountId: string, balanceCents: number): Promise<void> {
+    if (!this.connected) {
+      await this.connect();
+    }
+
+    await actualAPI.updateAccount(accountId, { balance_current: balanceCents } as any);
+  }
+
   async shutdown(): Promise<void> {
     try {
       await actualAPI.shutdown();

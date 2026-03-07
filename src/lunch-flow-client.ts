@@ -109,4 +109,11 @@ export class LunchFlowClient {
       }
     }, `Fetch transactions for account ${accountId}`);
   }
+
+  async getAccountBalance(accountId: LunchFlowAccountId): Promise<{ amount: number; currency: string }> {
+    return this.retryWithBackoff(async () => {
+      const response = await this.client.get(`/accounts/${accountId}/balance`);
+      return response.data.balance;
+    }, `Fetch balance for account ${accountId}`);
+  }
 }

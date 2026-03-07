@@ -152,7 +152,9 @@ export class LunchFlowImporter {
       const allLfTransactions: LunchFlowTransaction[] = [];
       const accountResults: { account: string; postedCount: number; pendingCount: number; success: boolean }[] = [];
       
-      for (const mapping of this.config.accountMappings) {
+      const transactionMappings = this.config.accountMappings.filter(m => !m.balanceOnly);
+
+      for (const mapping of transactionMappings) {
         try {
           const accountTransactions = await this.lfClient.getTransactions(
             mapping.lunchFlowAccountId,
@@ -199,7 +201,7 @@ export class LunchFlowImporter {
       });
       
       accountResults.forEach((result, index) => {
-        const mapping = this.config!.accountMappings[index];
+        const mapping = transactionMappings[index];
         const pendingDisplay = mapping.includePending 
           ? result.pendingCount.toString() 
           : chalk.gray('N/A');
@@ -214,90 +216,127 @@ export class LunchFlowImporter {
       
       console.log(table.toString());
 
-      if (allLfTransactions.length === 0) {
+      // Transaction import phase (only for non-balanceOnly mappings)
+      if (allLfTransactions.length > 0) {
+        const mapper = new TransactionMapper(this.config.accountMappings);
+        let abTransactions = mapper.mapTransactions(allLfTransactions);
+
+        if (abTransactions.length > 0) {
+          // Check for duplicates if enabled
+          if (this.config.actualBudget.duplicateCheckingAcrossAccounts) {
+            const duplicateCheckSpinner = this.ui.showSpinner('Checking for duplicate transactions across all accounts...');
+            try {
+              const existingTransactions = await this.abClient.getTransactions();
+              const duplicateDetector = new DuplicateTransactionDetector(existingTransactions);
+              abTransactions = duplicateDetector.checkForDuplicates(abTransactions);
+
+              const duplicateCount = duplicateDetector.getDuplicateCount(abTransactions);
+              duplicateCheckSpinner.stop();
+
+              if (duplicateCount > 0) {
+                this.ui.showInfo(`Found ${duplicateCount} duplicate transactions that will be skipped`);
+              }
+            } catch (error) {
+              duplicateCheckSpinner.stop();
+              this.ui.showWarning('Failed to check for duplicates, proceeding without duplicate detection');
+              console.warn('Duplicate check error:', error);
+            }
+          }
+
+          const startDate = abTransactions.reduce((min, t) => t.date < min ? t.date : min, abTransactions[0].date);
+          const endDate = abTransactions.reduce((max, t) => t.date > max ? t.date : max, abTransactions[0].date);
+
+          // Show preview
+          const abAccounts = await this.abClient.getAccounts();
+          await this.ui.showTransactionPreview(abTransactions, abAccounts);
+
+          // Filter out duplicates for import
+          const uniqueTransactions = this.config.actualBudget.duplicateCheckingAcrossAccounts
+            ? abTransactions.filter(t => !t.isDuplicate)
+            : abTransactions;
+
+          if (!skipConfirmation) {
+            const confirmed = await this.ui.confirmImport(uniqueTransactions.length, { startDate, endDate });
+            if (!confirmed) {
+              this.ui.showInfo('Import cancelled');
+              if (throwOnError) {
+                throw new Error('Import cancelled by user');
+              }
+              return;
+            }
+          } else {
+            console.log(chalk.blue(`\n📥 Proceeding with import of ${uniqueTransactions.length} transactions (non-interactive mode)\n`));
+          }
+
+          if (uniqueTransactions.length > 0) {
+            // Remove internal tracking fields before import (Actual Budget API doesn't recognize them)
+            const cleanTransactions = uniqueTransactions.map(({ isDuplicate, duplicateOf, isPending, ...transaction }) => transaction);
+
+            const importSpinner = this.ui.showSpinner(`Importing ${cleanTransactions.length} transactions...`);
+            await this.abClient.importTransactions(cleanTransactions);
+            importSpinner.stop();
+
+            const accountCount = new Set(cleanTransactions.map(t => t.account)).size;
+            this.ui.showSuccess(`Successfully imported ${cleanTransactions.length} transactions across ${accountCount} account(s)`);
+
+            // Show duplicate summary if any were found
+            if (this.config.actualBudget.duplicateCheckingAcrossAccounts) {
+              const duplicateCount = abTransactions.length - uniqueTransactions.length;
+              if (duplicateCount > 0) {
+                this.ui.showInfo(`${duplicateCount} duplicate transactions were skipped`);
+              }
+            }
+          } else {
+            this.ui.showInfo('No unique transactions to import (all were duplicates)');
+          }
+        } else {
+          this.ui.showWarning('No transactions could be mapped to Actual Budget accounts');
+        }
+      } else if (transactionMappings.length > 0) {
         this.ui.showInfo('No transactions found for any of the mapped accounts');
-        return;
       }
 
-      const mapper = new TransactionMapper(this.config.accountMappings);
-      let abTransactions = mapper.mapTransactions(allLfTransactions);
+      // Balance sync phase (runs for ALL mappings)
+      console.log(chalk.blue('\n💰 Syncing account balances...\n'));
+      const balanceResults: { account: string; balance: string; success: boolean }[] = [];
 
-      if (abTransactions.length === 0) {
-        this.ui.showError('No transactions could be mapped to Actual Budget accounts');
-        if (throwOnError) {
-          throw new Error('No transactions could be mapped');
-        }
-        return;
-      }
-
-      // Check for duplicates if enabled
-      if (this.config.actualBudget.duplicateCheckingAcrossAccounts) {
-        const duplicateCheckSpinner = this.ui.showSpinner('Checking for duplicate transactions across all accounts...');
+      for (const mapping of this.config.accountMappings) {
         try {
-          const existingTransactions = await this.abClient.getTransactions();
-          const duplicateDetector = new DuplicateTransactionDetector(existingTransactions);
-          abTransactions = duplicateDetector.checkForDuplicates(abTransactions);
-          
-          const duplicateCount = duplicateDetector.getDuplicateCount(abTransactions);
-          duplicateCheckSpinner.stop();
-          
-          if (duplicateCount > 0) {
-            this.ui.showInfo(`Found ${duplicateCount} duplicate transactions that will be skipped`);
-          }
+          const balance = await this.lfClient.getAccountBalance(mapping.lunchFlowAccountId);
+          const balanceCents = Math.round(balance.amount * 100);
+          await this.abClient.updateAccountBalance(mapping.actualBudgetAccountId, balanceCents);
+          balanceResults.push({
+            account: mapping.actualBudgetAccountName,
+            balance: `${balance.amount.toFixed(2)} ${balance.currency}`,
+            success: true,
+          });
         } catch (error) {
-          duplicateCheckSpinner.stop();
-          this.ui.showWarning('Failed to check for duplicates, proceeding without duplicate detection');
-          console.warn('Duplicate check error:', error);
+          console.warn(`Failed to sync balance for ${mapping.lunchFlowAccountName}:`, error);
+          balanceResults.push({
+            account: mapping.actualBudgetAccountName,
+            balance: 'N/A',
+            success: false,
+          });
         }
       }
 
-      const startDate = abTransactions.reduce((min, t) => t.date < min ? t.date : min, abTransactions[0].date);
-      const endDate = abTransactions.reduce((max, t) => t.date > max ? t.date : max, abTransactions[0].date);
+      const balanceTable = new Table({
+        head: ['Account', 'Balance', 'Status'],
+        colWidths: [30, 20, 12],
+      });
 
-      // Show preview
-      const abAccounts = await this.abClient.getAccounts();
-      await this.ui.showTransactionPreview(abTransactions, abAccounts);
+      balanceResults.forEach(result => {
+        balanceTable.push([
+          result.account,
+          result.balance,
+          result.success ? '✅ Synced' : '❌ Failed',
+        ]);
+      });
 
-      // Filter out duplicates for import
-      const uniqueTransactions = this.config.actualBudget.duplicateCheckingAcrossAccounts 
-        ? abTransactions.filter(t => !t.isDuplicate)
-        : abTransactions;
+      console.log(balanceTable.toString());
 
-      if (!skipConfirmation) {
-        const confirmed = await this.ui.confirmImport(uniqueTransactions.length, { startDate, endDate });
-        if (!confirmed) {
-          this.ui.showInfo('Import cancelled');
-          if (throwOnError) {
-            throw new Error('Import cancelled by user');
-          }
-          return;
-        }
-      } else {
-        console.log(chalk.blue(`\n📥 Proceeding with import of ${uniqueTransactions.length} transactions (non-interactive mode)\n`));
-      }
-
-      if (uniqueTransactions.length === 0) {
-        this.ui.showInfo('No unique transactions to import (all were duplicates)');
-        return;
-      }
-
-      // Remove internal tracking fields before import (Actual Budget API doesn't recognize them)
-      const cleanTransactions = uniqueTransactions.map(({ isDuplicate, duplicateOf, isPending, ...transaction }) => transaction);
-
-      const importSpinner = this.ui.showSpinner(`Importing ${cleanTransactions.length} transactions...`);
-      await this.abClient.importTransactions(cleanTransactions);
-      importSpinner.stop();
-
-      const accountCount = new Set(cleanTransactions.map(t => t.account)).size;
-      this.ui.showSuccess(`Successfully imported ${cleanTransactions.length} transactions across ${accountCount} account(s)`);
-      
-      // Show duplicate summary if any were found
-      if (this.config.actualBudget.duplicateCheckingAcrossAccounts) {
-        const duplicateCount = abTransactions.length - uniqueTransactions.length;
-        if (duplicateCount > 0) {
-          this.ui.showInfo(`${duplicateCount} duplicate transactions were skipped`);
-        }
-      }
+      const syncedCount = balanceResults.filter(r => r.success).length;
+      this.ui.showSuccess(`Synced balances for ${syncedCount}/${balanceResults.length} account(s)`);
     } catch (error) {
       spinner.stop();
       this.ui.showError('Failed to import transactions');

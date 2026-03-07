@@ -46,6 +46,7 @@ export interface AccountMapping {
   actualBudgetAccountName: string;
   syncStartDate?: string; // Optional sync start date in YYYY-MM-DD format
   includePending?: boolean;
+  balanceOnly?: boolean;
 }
 
 export interface Config {
